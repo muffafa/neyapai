@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from server.routers import user
+from server.routers import user, llm
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="NeYapAI API")
@@ -15,6 +15,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(user.router)
+app.include_router(llm.router)
 
 @app.get("/")
 async def root():

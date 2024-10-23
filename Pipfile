@@ -11,6 +11,15 @@ motor = "*"
 langchain = "*"
 python-dotenv = "*"
 dnspython = "*"
+openai = "*"
+langsmith = "*"
+langchainhub = "*"
+langchain-text-splitters = "*"
+langchain-community = "*"
+langchain-core = "*"
+langchain-openai = "*"
+langchain-google-genai = "*"
+streamlit = "*"
 
 [dev-packages]
 
