@@ -6,7 +6,6 @@ name = "pypi"
 [packages]
 fastapi = "*"
 uvicorn = "*"
-pydantic = "*"
 motor = "*"
 langchain = "*"
 python-dotenv = "*"
@@ -20,6 +19,7 @@ langchain-core = "*"
 langchain-openai = "*"
 langchain-google-genai = "*"
 streamlit = "*"
+pydantic = {extras = ["email"], version = "*"}
 
 [dev-packages]
 

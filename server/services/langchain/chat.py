@@ -39,6 +39,7 @@ def initialize_chat(conversation_id: str, chat_history: list):
         memory=memory,
         return_intermediate_steps=True,
         verbose=True,
+        handle_parsing_errors=True,
     )
 
     return agent_executor
