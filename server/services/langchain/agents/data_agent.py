@@ -1,9 +1,20 @@
-from langchain_experimental.agents import create_pandas_dataframe_agent
+from langchain.agents import initialize_agent, AgentType
 from langchain_google_genai import ChatGoogleGenerativeAI
 from server.services.data_loader import DataLoader
+from server.services.langchain.tools.education_tools import (
+    BransKarsilastirmaTool,
+    IlceKarsilastirmaTool
+)
 from typing import Tuple, List
 import os
+import time
 import logging
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,143 +27,87 @@ class DataAnalysisAgent:
             raise ValueError("GEMINI_API_KEY bulunamadı.")
             
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-pro",
+            model="gemini-1.5-flash",
             google_api_key=api_key,
             temperature=0,
-            convert_system_message_to_human=True
+            max_retries=3,
+            retry_wait_seconds=2
         )
-        self._create_agents()
-
-    def _create_agents(self):
-        """Create separate agents for each dataframe"""
-        agent_kwargs = {
-            "prefix": """Sen eğitim verilerini analiz eden bir uzman veri analistisin.
-            Veriyi analiz ederken şu adımları takip et:
-            1. Önce ne yapmak istediğini düşün
-            2. Gerekli Python kodunu yaz ve çalıştır
-            3. Sonuçları detaylı olarak analiz et ve sayısal değerleri mutlaka belirt
-            4. Türkçe ve anlaşılır bir yanıt ver
-            
-            İhtiyaç verilerini analiz ederken:
-            - 'branş' sütunu branşı gösterir
-            - 'ihtiyac' sütunu o branştaki öğretmen ihtiyacını gösterir
-            - Toplam ihtiyacı bulmak için ihtiyac sütununu grupla ve topla
-            - En az ilk 5 sonucu göster
-            - Sonuçları büyükten küçüğe sırala
-            
-            Norm fazlası verilerini analiz ederken:
-            - 'Branşı' sütunu branşı gösterir
-            - 'İlçe Adı' sütunu ilçeyi gösterir
-            - Her satır bir öğretmeni temsil eder
-            - Sayıları gruplarken count() kullan
-            - En az ilk 5 sonucu göster
-            
-            Yanıtını şu formatta ver:
-            Thought: <analiz planın>
-            Action: python_repl_ast
-            Action Input: <python kodun>
-            Observation: <gözlemlerin>
-            Thought: <sonuçları detaylı yorumla>
-            Final Answer: <türkçe detaylı açıklaman>
-            
-            Örnek yanıt:
-            "X branşında Y adet, Z branşında W adet ihtiyaç vardır..."
-            """,
-        }
-
-        self.ihtiyac_agent = create_pandas_dataframe_agent(
+        
+        # Toolları oluştur
+        self.tools = [
+            BransKarsilastirmaTool(
+                self.data_loader.ihtiyac_df,
+                self.data_loader.norm_fazlasi_df
+            ),
+            IlceKarsilastirmaTool(
+                self.data_loader.ihtiyac_df,
+                self.data_loader.norm_fazlasi_df
+            )
+        ]
+        
+        # Agent'ı başlat
+        self.agent = initialize_agent(
+            tools=self.tools,
             llm=self.llm,
-            df=self.data_loader.ihtiyac_df,
+            agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION,
             verbose=True,
             handle_parsing_errors=True,
-            max_iterations=3,
-            max_execution_time=30,
-            early_stopping_method="generate",
-            allow_dangerous_code=True,
-            **agent_kwargs
+            max_iterations=3
         )
 
-        self.norm_fazlasi_agent = create_pandas_dataframe_agent(
-            llm=self.llm, 
-            df=self.data_loader.norm_fazlasi_df,
-            verbose=True,
-            handle_parsing_errors=True,
-            max_iterations=3,
-            max_execution_time=30,
-            early_stopping_method="generate",
-            allow_dangerous_code=True,
-            **agent_kwargs
-        )
+        # Rate limiting için son istek zamanını tut
+        self.last_request_time = 0
+        self.min_request_interval = 1  # saniye
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type((Exception)),
+        after=lambda retry_state: logger.warning(
+            f"Retry attempt {retry_state.attempt_number} after error: {retry_state.outcome.exception()}"
+        )
+    )
     async def process_query(self, query: str) -> Tuple[str, List[dict]]:
         """Process user query and return response with thought process"""
         try:
-            thought_process = []
+            # Rate limiting kontrolü
+            current_time = time.time()
+            time_since_last_request = current_time - self.last_request_time
             
-            if "ihtiyaç" in query.lower() or "ihtiyac" in query.lower():
-                result = await self.ihtiyac_agent.ainvoke(
-                    {"input": query}
-                )
-                response = result.get("output", "Yanıt üretilemedi.")
-                thought_process = self._format_thought_process(result.get("intermediate_steps", []))
-                
-            elif "norm" in query.lower() or "fazla" in query.lower():
-                result = await self.norm_fazlasi_agent.ainvoke(
-                    {"input": query}
-                )
-                response = result.get("output", "Yanıt üretilemedi.")
-                thought_process = self._format_thought_process(result.get("intermediate_steps", []))
-                
-            else:
-                # Her iki ajanı da kullan
-                ihtiyac_result = await self.ihtiyac_agent.ainvoke(
-                    {"input": query}
-                )
-                norm_result = await self.norm_fazlasi_agent.ainvoke(
-                    {"input": query}
-                )
-                
-                response = (
-                    f"İhtiyaç Analizi:\n{ihtiyac_result.get('output', 'Yanıt üretilemedi.')}\n\n"
-                    f"Norm Fazlası Analizi:\n{norm_result.get('output', 'Yanıt üretilemedi.')}"
-                )
-                thought_process = (
-                    self._format_thought_process(ihtiyac_result.get("intermediate_steps", []), "İhtiyaç Analizi") +
-                    self._format_thought_process(norm_result.get("intermediate_steps", []), "Norm Fazlası Analizi")
-                )
+            if time_since_last_request < self.min_request_interval:
+                sleep_time = self.min_request_interval - time_since_last_request
+                logger.info(f"Rate limiting: Sleeping for {sleep_time:.2f} seconds")
+                time.sleep(sleep_time)
+            
+            # İsteği gönder
+            result = await self.agent.ainvoke(
+                {"input": query}
+            )
+            
+            # Son istek zamanını güncelle
+            self.last_request_time = time.time()
+            
+            response = result.get("output", "Yanıt üretilemedi.")
+            thought_process = self._format_thought_process(result.get("intermediate_steps", []))
             
             return response, thought_process
             
         except Exception as e:
-            logger.error(f"Query işlenirken hata oluştu: {str(e)}")
-            return f"Üzgünüm, bir hata oluştu: {str(e)}", []
+            logger.error(f"Query processing error: {str(e)}")
+            raise
 
-    def _format_thought_process(self, steps: list, prefix: str = "") -> List[dict]:
+    def _format_thought_process(self, steps: list) -> List[dict]:
         """Format intermediate steps into readable thought process"""
         formatted_steps = []
         try:
             for i, step in enumerate(steps, 1):
-                if prefix:
-                    step_prefix = f"{prefix} - Adım {i}"
-                else:
-                    step_prefix = f"Adım {i}"
-                    
-                if isinstance(step, tuple) and len(step) >= 2:
-                    formatted_steps.append({
-                        "step": step_prefix,
-                        "thought": step[0],  # Düşünce süreci
-                        "action": step[1] if len(step) > 1 else None,  # Yapılan işlem
-                        "observation": step[2] if len(step) > 2 else None  # Gözlem/Sonuç
-                    })
-                elif isinstance(step, dict):
-                    formatted_steps.append({
-                        "step": step_prefix,
-                        "thought": step.get("thought"),
-                        "action": step.get("action"),
-                        "observation": step.get("observation")
-                    })
-                    
+                formatted_steps.append({
+                    "step": f"Adım {i}",
+                    "thought": step.get("thought", ""),
+                    "action": step.get("tool", ""),
+                    "observation": step.get("observation", "")
+                })
         except Exception as e:
-            logger.error(f"Adım formatlanırken hata oluştu: {str(e)}")
-            
+            logger.error(f"Error formatting thought process: {str(e)}")
         return formatted_steps
