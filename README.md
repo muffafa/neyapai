@@ -21,7 +21,7 @@ LANGCHAIN_PROJECT="neyapai-test"
 - Run Streamlit server
 
 ```bash
-   streamlit run main.py
+   streamlit run ui/main.py
 ```
 
 
@@ -32,5 +32,5 @@ LANGCHAIN_PROJECT="neyapai-test"
 - Run FastAPI development server
 
 ```bash
-   fastapi dev main.py
+   pipenv run uvicorn server.main:app --reload 
 ```
