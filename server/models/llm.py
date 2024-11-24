@@ -1,8 +1,9 @@
 from pydantic import BaseModel
+from typing import List, Optional
 
 class LLMRequest(BaseModel):
     input: str
 
 class LLMResponse(BaseModel):
     output: str
-    intermediate_steps: list[str] = []
+    thought_process: Optional[List[dict]] = None
