@@ -3,7 +3,9 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from server.services.data_loader import DataLoader
 from server.services.langchain.tools.education_tools import (
     BransKarsilastirmaTool,
-    IlceKarsilastirmaTool
+    IlceKarsilastirmaTool,
+    IlceBransFiltrelemeTool,
+    IlceNormFazlasiSiralama
 )
 from typing import Tuple, List
 import os
@@ -41,6 +43,14 @@ class DataAnalysisAgent:
                 self.data_loader.norm_fazlasi_df
             ),
             IlceKarsilastirmaTool(
+                self.data_loader.ihtiyac_df,
+                self.data_loader.norm_fazlasi_df
+            ),
+            IlceBransFiltrelemeTool(
+                self.data_loader.ihtiyac_df,
+                self.data_loader.norm_fazlasi_df
+            ),
+            IlceNormFazlasiSiralama(
                 self.data_loader.ihtiyac_df,
                 self.data_loader.norm_fazlasi_df
             )
